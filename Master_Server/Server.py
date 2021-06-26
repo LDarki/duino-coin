@@ -1718,7 +1718,7 @@ def create_main_api_file():
 
             kolka_dict = {
                 "Jailed": len(jail),
-                "Banned:": len(banlist)
+                "Banned": len(banlist)
             }
 
             server_api = {
