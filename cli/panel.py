@@ -4,6 +4,9 @@ from colorama import Fore, Style, init
 from core.logger import log
 from core.config import BCRYPT_ROUNDS
 import bcrypt
+import os
+import sys
+import psutil
 
 init(autoreset=True)
 
@@ -43,11 +46,31 @@ async def cli_panel():
             beautify_print("""
                 Available commands:
                 - exit - exits DUCO server
+                - restart - restarts DUCO server
                 - help - shows this help menu
                 - user add <username> <password> <email> <balance>
                 - user info <username>
                 - user del <username>
             """)
+            
+        elif cmd[0] == "restart":
+            beautify_print("Are you sure you want to restart DUCO server?")
+            confirm = await asyncio.to_thread(input, " Y/n")
+            if confirm.lower() in ("y", ""):
+                os.system("sudo pkill -9 rsync")
+                
+                current_pid = os.getpid()
+                current_proc = psutil.Process(current_pid)
+
+                for child in current_proc.children(recursive=True):
+                    try:
+                        child.kill()
+                    except Exception as e:
+                        beautify_print(f"Error killing child process {child.pid}: {e}")
+                
+                os.execl(sys.executable, sys.executable, *sys.argv)
+            else:
+                beautify_print("Canceled")
 
         elif cmd[0] == "user":
             from core.db_instances import users_model
