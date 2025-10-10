@@ -51,6 +51,7 @@ async def cli_panel():
                 - user add <username> <password> <email> <balance>
                 - user info <username>
                 - user del <username>
+                - user upd <username> <key> <value>
             """)
             
         elif cmd[0] == "restart":
@@ -76,7 +77,13 @@ async def cli_panel():
             from core.db_instances import users_model
             
             if len(cmd) < 2:
-                beautify_print("Error: Missing user subcommand (add/info/del)")
+                beautify_print("""
+                    Usage:
+                    - user add <username> <password> <email> <balance>
+                    - user info <username>
+                    - user del <username>
+                    - user upd <username> <key> <value>
+                """)
                 continue
 
             subcmd = cmd[1]
@@ -84,16 +91,29 @@ async def cli_panel():
             if subcmd == "add" and len(cmd) == 6:
                 username, password, email, balance = cmd[2], cmd[3], cmd[4], cmd[5]
                 hashed_pass = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=BCRYPT_ROUNDS))
-                await users_model.add_user(username, hashed_pass, email, balance)
-                beautify_print(f"Success: User {username} added.")
-            
+                success = await users_model.add_user(username, hashed_pass, email, balance)
+                if success:
+                    beautify_print(f"Success: User {cmd[2]} added.")
+                else:
+                    beautify_print(f"Failed to add user {cmd[2]}.")
+                
             elif subcmd == "info" and len(cmd) == 3:
                 user = await users_model.get_user(cmd[2])
                 beautify_print(f"Info: {user}")
             
             elif subcmd == "del" and len(cmd) == 3:
-                await users_model.delete_user(cmd[2])
-                beautify_print(f"Success: User {cmd[2]} deleted.")
+                success = await users_model.delete_user(cmd[2])
+                if success:
+                    beautify_print(f"Success: User {cmd[2]} deleted.")
+                else:
+                    beautify_print(f"Failed to delete user {cmd[2]}.")
+                
+            elif subcmd == "upd" and len(cmd) == 5:
+                success = await users_model.update_user(cmd[2], cmd[3], cmd[4])
+                if success:
+                    beautify_print(f"Success: User {cmd[2]} updated.")
+                else:
+                    beautify_print(f"Failed to update user {cmd[2]}.")
             
             else:
                 beautify_print("""
@@ -101,6 +121,7 @@ async def cli_panel():
                     - user add <username> <password> <email> <balance>
                     - user info <username>
                     - user del <username>
+                    - user upd <username> <key> <value>
                 """)
 
         else:
