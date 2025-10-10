@@ -1,11 +1,13 @@
 from core.db import Database
 from time import time
+from core.utils import catch_errors
 
 class UserModel:
     def __init__(self, db: Database):
         self.db = db
 
     @classmethod
+    @catch_errors
     async def create(cls, db: Database):
         self = cls(db)
         await self.create_table()
@@ -32,12 +34,22 @@ class UserModel:
         res = await self.db.execute("SELECT * FROM Users")
         return res
 
+    @catch_errors
     async def get_user(self, username: str):
         res = await self.db.execute(
             "SELECT * FROM Users WHERE username=?", (username,)
         )
         return res[0] if res else None
+    
+    @catch_errors
+    async def update_user(self, username: str, key: str, value: str):
+        await self.db.execute(
+            f"UPDATE Users SET {key}=? WHERE username=?",
+            (value, username),
+            commit=True
+        )
 
+    @catch_errors
     async def add_user(self, username: str, password: str, email: str, balance: float = 0):
         await self.db.execute(
             "INSERT INTO Users (username,password,email,balance,created) VALUES (?,?,?,?,?)",
@@ -45,6 +57,7 @@ class UserModel:
             commit=True
         )
 
+    @catch_errors
     async def update_balance(self, username: str, new_balance: float):
         await self.db.execute(
             "UPDATE Users SET balance=? WHERE username=?",
@@ -52,6 +65,7 @@ class UserModel:
             commit=True
         )
 
+    @catch_errors
     async def delete_user(self, username: str):
         await self.db.execute(
             "DELETE FROM Users WHERE username=?",
