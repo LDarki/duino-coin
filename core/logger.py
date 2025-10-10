@@ -4,6 +4,15 @@ from colorama import Fore, Style, init
 init(autoreset=True)
 
 def setup_logger(name="DUCO"):
+    """
+    Sets up logger
+    
+    Args:
+        name (str): Logger name
+    
+    Returns:
+        Logger
+    """
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     ch = logging.StreamHandler()

@@ -8,6 +8,8 @@ users_db: Database = None
 users_model: UserModel = None
 
 async def instance_databases():
+    """Instances databases
+    """
     global users_db, users_model
 
     start_time = datetime.now()
