@@ -11,6 +11,19 @@ pub struct Databases {
 }
 
 impl Databases {
+    /// Initializes the databases specified in the `AppConfig`.
+    ///
+    /// This function will create the database files if they don't exist, and then connect to them.
+    /// It will also set some default PRAGMA values.
+    ///
+    /// The function will return a `Databases` object containing the connected database pools.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if any of the following operations fail:
+    /// - Creating a database file
+    /// - Connecting to a database
+    /// - Setting PRAGMA values for a database
     pub async fn init(cfg: &AppConfig) -> Result<Self> {
         for path in cfg.databases.values() {
             let p = Path::new(path);

@@ -10,6 +10,19 @@ use core::cli;
 use std::process;
 use tracing::info;
 
+/// Main entry point for the DUCO Server application.
+///
+/// This function initializes the database connections, starts the TCP server and CLI tasks,
+/// waits for the CLI task to finish and then closes all database connections before exiting the process.
+///
+/// The function will return an error if any of the following operations fail:
+/// - Loading the configuration file
+/// - Initializing the database connections
+/// - Starting the TCP server task
+/// - Starting the CLI task
+/// - Waiting for the CLI task to finish
+/// - Closing any of the database connections
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cfg = AppConfig::load(Some("config.toml")).expect("Failed to load Config.toml");

@@ -27,6 +27,14 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// Loads the application configuration from a TOML file located at the specified path.
+    ///
+    /// If no path is provided, the function will use the current working directory as the base directory,
+    /// create a "db" folder inside it if it doesn't already exist, and use default values for the server and security
+    /// configurations.
+    ///
+    /// The function will return an error if the TOML file cannot be read or parsed, or if the specified path
+    /// is invalid or doesn't point to a TOML file.
     pub fn load(path: Option<&str>) -> Result<Self> {
         let base_dir = env::current_dir()?.display().to_string();
         let db_folder = format!("{}/db", base_dir);

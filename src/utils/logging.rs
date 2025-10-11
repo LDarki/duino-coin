@@ -2,11 +2,22 @@ use colored::*;
 use chrono::Local;
 use std::io::Write;
 
+/// Initializes the logger by creating a directory for logs.
+///
+/// Returns `true` if the directory was successfully created, and `false` otherwise.
+/// @TODO: Expand logging functionality (e.g., file logging, log levels)
 pub fn init_logger() -> bool {
     let _ = std::fs::create_dir_all("logs");
     true
 }
 
+/// Prints a message with a timestamp and a level prefix.
+///
+/// # Arguments
+///
+/// * `msg`: The message to be printed.
+/// * `level`: The level of the message. Can be "error", "success", "warning", or any other string.
+///
 pub fn beautify_print(msg: &str, level: &str) {
     let ts = Local::now().format("%H:%M:%S").to_string();
     let prefix = match level {
