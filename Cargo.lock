@@ -329,6 +329,7 @@ dependencies = [
  "colored",
  "rand",
  "serde",
+ "serde_json",
  "sqlx",
  "sysinfo",
  "tokio",
