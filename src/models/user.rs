@@ -74,4 +74,13 @@ impl UserModel {
             .await?;
         Ok(())
     }
+
+    pub async fn update_password(&self, username: &str, new_password_hash: &str) -> Result<()> {
+        sqlx::query("UPDATE Users SET password = ? WHERE username = ?")
+            .bind(new_password_hash)
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
