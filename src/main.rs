@@ -9,6 +9,9 @@ use core::config::AppConfig;
 use core::cli;
 use std::process;
 use tracing::info;
+use std::sync::{Arc};
+use tokio::sync::Mutex;
+use crate::core::app::App;
 
 /// Main entry point for the DUCO Server application.
 ///
@@ -27,11 +30,15 @@ use tracing::info;
 async fn main() -> anyhow::Result<()> {
     let cfg = AppConfig::load(Some("config.toml")).expect("Failed to load Config.toml");
     let dbs = Databases::init(&cfg).await?;
+    let app = Arc::new(Mutex::new(App::new()));
+
+    let app_for_cli = Arc::clone(&app);
+    let app_for_tcp = Arc::clone(&app);
 
     info!("Starting server on {}:{}", cfg.server.tcp_host, cfg.server.tcp_port);
 
-    let _server_task = tokio::spawn(network::tcp_server::start_tcp_server(dbs.clone(), cfg.clone()));
-    let cli_task = tokio::spawn(core::cli::start_cli(dbs.clone()));
+    let _server_task = tokio::spawn(network::tcp_server::start_tcp_server(dbs.clone(), cfg.clone(), app_for_cli));
+    let cli_task = tokio::spawn(core::cli::start_cli(dbs.clone(), app_for_tcp));
 
     match cli_task.await {
         Ok(Ok(_)) => info!("CLI finished, terminating process"),

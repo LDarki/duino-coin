@@ -1,6 +1,11 @@
 use sqlx::{Pool, Sqlite, Row};
 use anyhow::Result;
 
+#[derive(Clone)]
+pub struct TransactionModel {
+    pub pool: Pool<Sqlite>,
+}
+
 #[derive(Debug)]
 pub struct Transaction {
     pub timestamp: String,
@@ -10,10 +15,6 @@ pub struct Transaction {
     pub hash: String,
     pub memo: String,
     pub id: i64,
-}
-
-pub struct TransactionModel {
-    pub pool: Pool<Sqlite>,
 }
 
 impl TransactionModel {

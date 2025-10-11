@@ -1,6 +1,7 @@
 use sqlx::{Pool, Sqlite, Row, Column};
 use anyhow::Result;
 
+#[derive(Clone)]
 pub struct UserModel {
     pub pool: Pool<Sqlite>,
 }

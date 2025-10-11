@@ -1,6 +1,16 @@
 use colored::*;
 use chrono::Local;
 use std::io::Write;
+use std::sync::Arc;
+use crate::core::app::App;
+use tokio::sync::Mutex;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Span, Text, Line};
+
+pub enum Tab {
+    Main,
+    Logs,
+}
 
 /// Initializes the logger by creating a directory for logs.
 ///
@@ -17,29 +27,51 @@ pub fn init_logger() -> bool {
 ///
 /// * `msg`: The message to be printed.
 /// * `level`: The level of the message. Can be "error", "success", "warning", or any other string.
-///
-pub fn beautify_print(msg: &str, level: &str) {
+/// * `app`: Optional Arc<Mutex<App>> to log the message in the app context.
+/// 
+pub fn beautify_print(msg: &str, level: &str, app: Option<Arc<Mutex<App>>>, tab: Tab) {
     let ts = Local::now().format("%H:%M:%S").to_string();
-    let prefix = match level {
-        "error" => "[ERROR]".red(),
-        "success" => "[OK]".green(),
-        "warning" => "[WARN]".yellow(),
-        _ => "[INFO]".cyan(),
+    let prefix = match level.to_lowercase().as_str() {
+        "error" => Span::styled("[ERROR]", Style::default().fg(Color::Red)),
+        "success" => Span::styled("[OK]", Style::default().fg(Color::Green)),
+        "warning" => Span::styled("[WARN]", Style::default().fg(Color::Yellow)),
+        _ => Span::styled("[INFO]", Style::default().fg(Color::Cyan)),
     };
 
-    let mut first_line = true;
+    let ts_span = Span::raw(ts);
+    let message_span = Span::raw(msg.trim());
 
-    for line in msg.lines() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            if first_line {
-                println!("\n{} {} {}", ts.dimmed(), prefix, trimmed);
-                first_line = false;
-            } else {
-                println!("{} {}", ts.dimmed(), trimmed);
+    let text_line = Text::from(
+        Line::from(vec![
+            ts_span,
+            Span::raw(" "),
+            prefix,
+            Span::raw(" "),
+            message_span,
+        ])
+    ).to_string();
+
+    if let Some(app) = app {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let mut app = app.lock().await;
+            match tab {
+                Tab::Main => {
+                    if app.console.len() == 100 {
+                        app.console.pop_front();
+                    }
+                    app.console.push_back(text_line);
+                }
+                Tab::Logs => {
+                    if app.logs.len() == 100 {
+                        app.logs.pop_front();
+                    }
+                    app.logs.push_back(text_line);
+                }
             }
-        }
+        });
+    } else {
+        println!("{}", text_line);
+        std::io::stdout().flush().unwrap();
     }
-
-    std::io::stdout().flush().unwrap();
 }
