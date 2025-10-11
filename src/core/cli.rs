@@ -6,13 +6,14 @@ use tokio::task;
 use std::process::Command;
 use std::time::Duration;
 use std::os::unix::process::CommandExt;
+use colored::*;
 
 pub async fn start_cli(dbs: Databases) -> anyhow::Result<()> {
     let user_model = UserModel::new(dbs.users.clone());
 
     loop {
 
-        print!("DUCO Server $ ");
+        print!("{}", "DUCO Server $ ".yellow());
         io::Write::flush(&mut io::stdout()).ok();
 
         let input = match task::spawn_blocking(|| {
