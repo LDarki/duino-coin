@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use colored::*;
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
@@ -12,13 +11,14 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Wrap, Table, Row},
+    widgets::{Block, Borders, Paragraph, Wrap, Table, Row, Sparkline},
     style::{Color, Style},
     text::{Span, Text},
     Terminal,
 };
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use sysinfo::{System};
 
 use crate::{
     core::app::App, 
@@ -26,12 +26,12 @@ use crate::{
     core::db::Databases,
     models::user::UserModel,
     models::user::User,
-    utils::logging::*,
     utils::helpers::*,
 };
 
 pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<()> {
     let user_model = Arc::new(UserModel::new(dbs.users.clone()));
+    let mut sys = System::new_all();
 
     {
         let mut app_lock = app.lock().await;
@@ -50,21 +50,22 @@ pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<(
         let (
             _input_text,
             connections,
-            metrics_text,
             logs_text,
             console_text,
+            cpu_history,
+            mem_history
         ) = {
-            let app = app.lock().await;
-            let logs_str = app.logs.iter().cloned().collect::<Vec<_>>().join("\n");
+            let mut app_lock = app.lock().await;
+            let logs_str = app_lock.logs.iter().cloned().collect::<Vec<_>>().join("\n");
 
             let console_content = {
-                let mut lines = app.console.iter().map(|s| s.trim_end()).collect::<Vec<_>>();
+                let mut lines = app_lock.console.iter().map(|s| s.trim_end()).collect::<Vec<_>>();
 
                 let prompt_line = Text::from(Line::from(
                     vec![
                         Span::styled("DUCO Server $", Style::default().fg(Color::Yellow)),
                         Span::raw(" "),
-                        Span::raw(&app.input),
+                        Span::raw(&app_lock.input),
                     ]
                 )).to_string();
 
@@ -72,12 +73,30 @@ pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<(
                 lines.join("\n")
             };
 
+            sys.refresh_cpu_all();
+            sys.refresh_memory();
+
+            let global_cpu = sys.global_cpu_usage();
+            let total_mem = sys.total_memory() as f32;
+            let used_mem = sys.used_memory() as f32;
+            let mem_percent: f32 = (used_mem / total_mem) * 100.0;
+
+            app_lock.cpu_history.push(global_cpu);
+            app_lock.mem_history.push(mem_percent);
+            if app_lock.cpu_history.len() > 30 {
+                app_lock.cpu_history.remove(0);
+            }
+            if app_lock.mem_history.len() > 30 {
+                app_lock.mem_history.remove(0);
+            }
+
             (
-                app.input.clone(),
-                app.connections.clone(),
-                app.metrics.join("\n"),
+                app_lock.input.clone(),
+                app_lock.connections.clone(),
                 logs_str,
                 console_content,
+                app_lock.cpu_history.clone(),
+                app_lock.mem_history.clone(),
             )
         };
 
@@ -85,9 +104,10 @@ pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<(
             &mut terminal,
             &_input_text,
             &connections,
-            &metrics_text,
             &logs_text,
             &console_text,
+            &cpu_history,
+            &mem_history,
         )?;
 
         sleep(Duration::from_millis(100)).await;
@@ -241,7 +261,7 @@ async fn handle_user_command(
                     let mut app = app_clone.lock().await;
                     app.console(user_info_table(&u));
                 }
-                Ok(None) => {
+                Ok(none) => {
                     let mut app = app_clone.lock().await;
                     app.console(
                         format!("User '{}' not found", username)
@@ -325,12 +345,13 @@ pub fn draw_tui(
     terminal: &mut Terminal<CrosstermBackend<&mut Stdout>>,
     _input_text: &str,
     connections: &Vec<Connection>,
-    metrics_text: &str,
     logs_text: &str,
     console_text: &str,
+    cpu_history: &Vec<f32>,
+    mem_history: &Vec<f32>,
 ) -> Result<()> {
     terminal.draw(|f| {
-        let size = f.size();
+        let size = f.area();
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -351,9 +372,7 @@ pub fn draw_tui(
         let console_line_count = console_text.lines().count() as u16;
         let console_scroll = if console_line_count > console_height {
             console_line_count - console_height
-        } else {
-            0
-        };
+        } else { 0 };
 
         let console_block = Paragraph::new(console_text)
             .block(Block::default().title("DUCO Server $").borders(Borders::ALL))
@@ -365,9 +384,7 @@ pub fn draw_tui(
         let logs_line_count = logs_text.lines().count() as u16;
         let logs_scroll = if logs_line_count > logs_height {
             logs_line_count - logs_height
-        } else {
-            0
-        };
+        } else { 0 };
 
         let logs_block = Paragraph::new(logs_text)
             .block(Block::default().title("Logs").borders(Borders::ALL))
@@ -404,14 +421,38 @@ pub fn draw_tui(
             ]))
             .block(Block::default().title("Connections").borders(Borders::ALL));
 
-        let metrics_block = Paragraph::new(metrics_text)
-            .block(Block::default().title("Metrics").borders(Borders::ALL))
-            .wrap(Wrap { trim: true });
+        let cpu_last = *cpu_history.last().unwrap_or(&0.0);
+        let cpu_sparkline = Sparkline::default()
+            .block(
+                Block::default()
+                    .title(format!("CPU Usage: {:.1}%", cpu_last))
+                    .borders(Borders::ALL)
+            )
+            .data(&cpu_history.iter().map(|v| *v as u64).collect::<Vec<u64>>())
+            .style(Style::default().fg(color_for_percentage(cpu_last)))
+            .max(100);
+
+        let mem_last = *mem_history.last().unwrap_or(&0.0);
+        let mem_sparkline = Sparkline::default()
+            .block(
+                Block::default()
+                    .title(format!("Memory Usage: {:.1}%", mem_last))
+                    .borders(Borders::ALL)
+            )
+            .data(&mem_history.iter().map(|v| *v as u64).collect::<Vec<u64>>())
+            .style(Style::default().fg(color_for_percentage(mem_last)))
+            .max(100);
+
+        let metrics_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(bottom_row[1]);
 
         f.render_widget(console_block, console_area);
         f.render_widget(logs_block, logs_area);
         f.render_widget(connections_table, bottom_row[0]);
-        f.render_widget(metrics_block, bottom_row[1]);
+        f.render_widget(cpu_sparkline, metrics_layout[0]);
+        f.render_widget(mem_sparkline, metrics_layout[1]);
     })?;
     Ok(())
 }
@@ -429,4 +470,12 @@ fn user_info_table(user: &User) -> String {
     lines.push("+----------------+----------------------+".to_string());
 
     lines.join("\n")
+}
+
+fn color_for_percentage(value: f32) -> Color {
+    match value as u64 {
+        0..=50 => Color::Green,
+        51..=80 => Color::Yellow,
+        _ => Color::Red,
+    }
 }

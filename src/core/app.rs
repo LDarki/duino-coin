@@ -11,7 +11,8 @@ pub struct App {
     pub logs: VecDeque<String>,
     pub console: VecDeque<String>,
     pub connections: Vec<Connection>,
-    pub metrics: Vec<String>,
+    pub cpu_history: Vec<f32>,
+    pub mem_history: Vec<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,7 +33,8 @@ impl App {
             logs: VecDeque::with_capacity(100),
             console: VecDeque::with_capacity(100),
             connections: vec![],
-            metrics: vec!["Balance: 0".to_string(), "TPS: 0".to_string()],
+            cpu_history: vec![],
+            mem_history: vec![],
         }
     }
 
@@ -72,14 +74,5 @@ impl App {
         {
             conn.data_sent += bytes as u64;
         }
-    }
-
-
-    pub fn add_metric(&mut self, metric: String) {
-        self.metrics.push(metric);
-    }
-
-    pub fn clear_metrics(&mut self) {
-        self.metrics.clear();
     }
 }
