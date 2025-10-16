@@ -13,7 +13,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use crate::utils::logging::Tab;
-use chrono::{DateTime, Local, Duration};
+use tokio::time::{timeout, Duration};
 use crate::core::app::Connection;
 
 /// Starts a TCP server that listens for incoming connections and
@@ -82,14 +82,24 @@ async fn handle_client(
     let mut username: Option<String> = None;
     let mut bytes_sent_accum: usize = 0;
     let mut bytes_recv_accum: usize = 0;
-    const FLUSH_THRESHOLD: usize = 256;
+    const FLUSH_THRESHOLD: usize = 1024;
+
+    // If no data is received within this duration, the connection will be closed.
+    let idle_timeout = Duration::from_secs(300); // 5 minutes
 
     loop {
-        let n = match socket.read(&mut buf).await {
-            Ok(n) => n,
+        let read_result = timeout(idle_timeout, socket.read(&mut buf)).await;
+
+        let n = match read_result {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                let mut app = app.lock().await;
+                app.log(format!("Read error: {:?}", e));
+                break;
+            }
             Err(e) => {
                 let mut app = app.lock().await;
-                app.log(format!("Error reading from socket: {:?}", e));
+                app.log(format!("Timeout reading socket: {:?}", e));
                 break;
             }
         };
@@ -145,7 +155,7 @@ async fn handle_client(
                             socket.write_all(b"NO,Invalid password\n").await?;
                         }
                     }
-                    Ok(None) => {
+                    Ok(_none) => {
                         socket.write_all(b"NO,User not found\n").await?;
                         let mut app = app.lock().await;
                         app.log(format!("Failed login attempt: {}", user_input));
@@ -170,7 +180,7 @@ async fn handle_client(
                                 .write_all(format!("{:.6}\n", u.balance).as_bytes())
                                 .await?;
                         }
-                        Ok(None) => socket.write_all(b"NO,User not found\n").await?,
+                        Ok(_none) => socket.write_all(b"NO,User not found\n").await?,
                         Err(e) => {
                             socket
                                 .write_all(format!("NO,Error: {:?}\n", e).as_bytes())
