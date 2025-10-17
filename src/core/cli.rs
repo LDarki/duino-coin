@@ -1,7 +1,7 @@
 use std::io::{self, Stdout};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
-use std::process::Command;
 
 use anyhow::Result;
 use crossterm::{
@@ -13,22 +13,17 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Wrap, Table, Row, Sparkline},
     style::{Color, Style},
+    widgets::{Block, Borders, Paragraph, Row, Sparkline, Table, Wrap},
     Terminal,
 };
 
-use sysinfo::{System};
 use std::env;
+use sysinfo::System;
 
 use crate::{
-    core::app::App, 
-    core::app::Connection,
-    core::app::ConnectionEvent,
-    core::db::Databases,
-    models::user::UserModel,
-    models::user::User,
-    utils::helpers::*,
+    core::app::App, core::app::Connection, core::app::ConnectionEvent, core::db::Databases,
+    models::user::User, models::user::UserModel, utils::crypto::hash_password, utils::helpers::*,
 };
 use tokio::time::sleep;
 
@@ -43,7 +38,6 @@ struct CliState {
     cpu_history: Vec<f32>,
     mem_history: Vec<f32>,
 }
-
 
 pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
     let user_model = Arc::new(UserModel::new(dbs.users.clone()));
@@ -62,7 +56,9 @@ pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
     };
 
     {
-        app.console(colored::Colorize::yellow("Type 'help' for commands, 'exit' to quit.").to_string());
+        app.console(
+            colored::Colorize::yellow("Type 'help' for commands, 'exit' to quit.").to_string(),
+        );
     }
 
     let metrics_tx_clone = app.metrics_tx.clone();
@@ -74,10 +70,15 @@ pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
             sys.refresh_cpu_all();
             sys.refresh_memory();
 
-            let cpu_usage = sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
+            let cpu_usage =
+                sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
             let mem_used = sys.used_memory() as f32;
             let mem_total = sys.total_memory() as f32;
-            let mem_percent = if mem_total > 0.0 { (mem_used / mem_total) * 100.0 } else { 0.0 };
+            let mem_percent = if mem_total > 0.0 {
+                (mem_used / mem_total) * 100.0
+            } else {
+                0.0
+            };
 
             let _ = metrics_tx_clone.send((cpu_usage, mem_percent));
 
@@ -96,19 +97,27 @@ pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
     loop {
         while let Ok(msg) = log_rx.try_recv() {
             state.logs.push(msg.to_string());
-            if state.logs.len() > 100 { state.logs.remove(0); }
+            if state.logs.len() > 100 {
+                state.logs.remove(0);
+            }
         }
-        
+
         while let Ok(msg) = console_rx.try_recv() {
             state.console.push(msg.to_string());
-            if state.console.len() > 100 { state.console.remove(0); }
+            if state.console.len() > 100 {
+                state.console.remove(0);
+            }
         }
 
         while let Ok((cpu, mem)) = metrics_rx.try_recv() {
             state.cpu_history.push(cpu);
             state.mem_history.push(mem);
-            if state.cpu_history.len() > 30 { state.cpu_history.remove(0); }
-            if state.mem_history.len() > 30 { state.mem_history.remove(0); }
+            if state.cpu_history.len() > 30 {
+                state.cpu_history.remove(0);
+            }
+            if state.mem_history.len() > 30 {
+                state.mem_history.remove(0);
+            }
         }
 
         while let Ok(event) = conn_rx.try_recv() {
@@ -156,7 +165,10 @@ pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
                 match key.code {
                     KeyCode::Char(c) => {
                         if c == 'c' && key.modifiers.contains(KeyModifiers::CONTROL) {
-                            app.console(colored::Colorize::yellow("Received Ctrl+C. Exiting...").to_string());
+                            app.console(
+                                colored::Colorize::yellow("Received Ctrl+C. Exiting...")
+                                    .to_string(),
+                            );
                             should_break = true;
                         } else {
                             let mut input = app.input.lock().await;
@@ -182,20 +194,21 @@ pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
                         if restart_confirmation_pending {
                             if cmd.to_lowercase() == "y" {
                                 app.console(colored::Colorize::green("Restarting...").to_string());
-                                let exe = env::current_exe().expect("Failed to get current exe path");
+                                let exe =
+                                    env::current_exe().expect("Failed to get current exe path");
 
                                 disable_raw_mode()?;
-                                
+
                                 terminal.clear()?;
 
-                                let _ = Command::new(exe)
-                                    .args(env::args().skip(1))
-                                    .exec();
+                                let _ = Command::new(exe).args(env::args().skip(1)).exec();
 
                                 eprintln!("Failed to exec the new process");
                                 std::process::exit(1);
                             } else {
-                                app.console(colored::Colorize::yellow("Restart cancelled.").to_string());
+                                app.console(
+                                    colored::Colorize::yellow("Restart cancelled.").to_string(),
+                                );
                             }
                             restart_confirmation_pending = false;
                             continue;
@@ -247,7 +260,7 @@ async fn handle_command(cmd: String, app: &Arc<App>, user_model: Arc<UserModel>)
             - help: Shows this message
             - restart: Re-initializes server state (needs 'Y' confirmation)
             - clear
-            - user add/info/del/upd";
+            - user add/info/del/upd/pass";
             app.console(help_msg.to_string());
         }
         Some("user") => {
@@ -259,11 +272,7 @@ async fn handle_command(cmd: String, app: &Arc<App>, user_model: Arc<UserModel>)
     }
 }
 
-async fn handle_user_command(
-    parts: Vec<&str>,
-    app: &Arc<App>,
-    user_model: Arc<UserModel>,
-) {
+async fn handle_user_command(parts: Vec<&str>, app: &Arc<App>, user_model: Arc<UserModel>) {
     let user_model_clone = Arc::clone(&user_model);
 
     match parts.get(1).map(|s| *s) {
@@ -271,30 +280,23 @@ async fn handle_user_command(
             let username = parts[2].to_string();
             let password = parts[3].to_string();
             let email = parts[4].to_string();
-            let balance: f64 =
-                parts[5].parse().unwrap_or(0.0);
+            let balance: f64 = parts[5].parse().unwrap_or(0.0);
 
             match user_model_clone
                 .add_user(&username, &password, &email, balance)
-                .await 
+                .await
             {
                 Ok(_) => {
-                    app.console(
-                        format!("User added: {}", username)
-                            .green()
-                            .to_string(),
-                    );
+                    app.console(format!("User added: {}", username).green().to_string());
                 }
                 Err(e) => {
-                    app.console(
-                        format!("Error: {}", e).red().to_string(),
-                    );
+                    app.console(format!("Error: {}", e).red().to_string());
                 }
             }
         }
         Some("info") if parts.len() == 3 => {
             let username = parts[2];
-            match user_model_clone.get_user(username).await { 
+            match user_model_clone.get_user(username).await {
                 Ok(Some(u)) => {
                     app.console(user_info_table(&u));
                 }
@@ -306,28 +308,18 @@ async fn handle_user_command(
                     );
                 }
                 Err(e) => {
-                    app.console(
-                        format!("Error: {:?}", e).red().to_string(),
-                    );
+                    app.console(format!("Error: {:?}", e).red().to_string());
                 }
             }
         }
         Some("del") if parts.len() == 3 => {
             let username = parts[2];
-            match user_model_clone.delete_user(username).await { 
+            match user_model_clone.delete_user(username).await {
                 Ok(_) => {
-                    app.console(
-                        format!("User deleted: {}", username)
-                            .green()
-                            .to_string(),
-                    );
+                    app.console(format!("User deleted: {}", username).green().to_string());
                 }
                 Err(e) => {
-                    app.console(
-                        format!("Delete failed: {}", e)
-                            .red()
-                            .to_string(),
-                    );
+                    app.console(format!("Delete failed: {}", e).red().to_string());
                 }
             }
         }
@@ -335,26 +327,38 @@ async fn handle_user_command(
             let username = parts[2];
             let field = parts[3];
             let value = parts[4];
-            match user_model_clone
-                .update_user(username, field, value)
-                .await 
-            {
+            match user_model_clone.update_user(username, field, value).await {
                 Ok(_) => {
                     app.console(
-                        format!(
-                            "User {} updated field {} to {}",
-                            username, field, value
-                        )
-                        .green()
-                        .to_string(),
+                        format!("User {} updated field {} to {}", username, field, value)
+                            .green()
+                            .to_string(),
                     );
                 }
                 Err(e) => {
+                    app.console(format!("Update failed: {}", e).red().to_string());
+                }
+            }
+        }
+        Some("pass") if parts.len() == 4 => {
+            let username = parts[2];
+            let new_password = parts[3];
+
+            let hashed_password = hash_password(&new_password).unwrap();
+
+            match user_model_clone
+                .update_password(username, &hashed_password)
+                .await
+            {
+                Ok(_) => {
                     app.console(
-                        format!("Update failed: {}", e)
-                            .red()
+                        format!("User {} password updated", username)
+                            .green()
                             .to_string(),
                     );
+                }
+                Err(e) => {
+                    app.console(format!("Update failed: {}", e).red().to_string());
                 }
             }
         }
@@ -365,6 +369,7 @@ async fn handle_user_command(
                 - user info <username>
                 - user del <username>
                 - user upd <username> <field> <value>
+                - user pass <username> <new_password>
                 ";
             app.console(usage.to_string());
         }
@@ -398,16 +403,22 @@ pub fn draw_tui(
             .split(rows[1]);
 
         let console_area = top_row[0];
-        let console_height = console_area.height.saturating_sub(2); 
+        let console_height = console_area.height.saturating_sub(2);
         let console_line_count = console_text.lines().count() as u16;
         let console_scroll = if console_line_count > console_height {
             console_line_count - console_height
-        } else { 0 };
+        } else {
+            0
+        };
 
         let console_combined = format!("{}\n> {}", console_text, input_text);
 
         let console_block = Paragraph::new(console_combined)
-            .block(Block::default().title("DUCO Server $").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title("DUCO Server $")
+                    .borders(Borders::ALL),
+            )
             .wrap(Wrap { trim: true })
             .scroll((console_scroll as u16, 0));
 
@@ -416,26 +427,31 @@ pub fn draw_tui(
         let logs_line_count = logs_text.lines().count() as u16;
         let logs_scroll = if logs_line_count > logs_height {
             logs_line_count - logs_height
-        } else { 0 };
+        } else {
+            0
+        };
 
         let logs_block = Paragraph::new(logs_text)
             .block(Block::default().title("Logs").borders(Borders::ALL))
             .wrap(Wrap { trim: true })
             .scroll((logs_scroll as u16, 0));
 
-        let table_rows: Vec<Row> = connections.iter().map(|c| {
-            let status_color = if c.status { Color::Green } else { Color::Red };
-            Row::new(vec![
-                c.name.clone(),
-                c.ip.clone(),
-                c.port.to_string(),
-                c.status.to_string(),
-                humanize_bytes(c.data_sent),
-                humanize_bytes(c.data_received),
-                humanize_time_since(c.uptime),
-            ])
-            .style(Style::default().fg(status_color))
-        }).collect();
+        let table_rows: Vec<Row> = connections
+            .iter()
+            .map(|c| {
+                let status_color = if c.status { Color::Green } else { Color::Red };
+                Row::new(vec![
+                    c.name.clone(),
+                    c.ip.clone(),
+                    c.port.to_string(),
+                    c.status.to_string(),
+                    humanize_bytes(c.data_sent),
+                    humanize_bytes(c.data_received),
+                    humanize_time_since(c.uptime),
+                ])
+                .style(Style::default().fg(status_color))
+            })
+            .collect();
 
         let column_widths = [
             Constraint::Length(12),
@@ -449,7 +465,7 @@ pub fn draw_tui(
 
         let connections_table = Table::new(table_rows, column_widths)
             .header(Row::new(vec![
-                "Name", "IP", "Port", "Status", "Sent", "Received", "Uptime"
+                "Name", "IP", "Port", "Status", "Sent", "Received", "Uptime",
             ]))
             .block(Block::default().title("Connections").borders(Borders::ALL));
 
@@ -458,7 +474,7 @@ pub fn draw_tui(
             .block(
                 Block::default()
                     .title(format!("CPU Usage: {:.1}%", cpu_last))
-                    .borders(Borders::ALL)
+                    .borders(Borders::ALL),
             )
             .data(&cpu_history.iter().map(|v| *v as u64).collect::<Vec<u64>>())
             .style(Style::default().fg(color_for_percentage(cpu_last)))
@@ -469,7 +485,7 @@ pub fn draw_tui(
             .block(
                 Block::default()
                     .title(format!("Memory Usage: {:.1}%", mem_last))
-                    .borders(Borders::ALL)
+                    .borders(Borders::ALL),
             )
             .data(&mem_history.iter().map(|v| *v as u64).collect::<Vec<u64>>())
             .style(Style::default().fg(color_for_percentage(mem_last)))
