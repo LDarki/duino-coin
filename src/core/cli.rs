@@ -33,6 +33,8 @@ use crate::{
 use tokio::time::sleep;
 
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 struct CliState {
     connections: HashMap<String, Connection>,
@@ -182,12 +184,16 @@ pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
                                 app.console(colored::Colorize::green("Restarting...").to_string());
                                 let exe = env::current_exe().expect("Failed to get current exe path");
 
-                                Command::new(exe)
-                                    .args(env::args().skip(1))
-                                    .spawn()
-                                    .expect("Failed to spawn new process");
+                                disable_raw_mode()?;
+                                
+                                terminal.clear()?;
 
-                                std::process::exit(0);
+                                let _ = Command::new(exe)
+                                    .args(env::args().skip(1))
+                                    .exec();
+
+                                eprintln!("Failed to exec the new process");
+                                std::process::exit(1);
                             } else {
                                 app.console(colored::Colorize::yellow("Restart cancelled.").to_string());
                             }
