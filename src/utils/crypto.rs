@@ -10,7 +10,6 @@ use rand::rngs::OsRng;
 use crate::utils::logging::beautify_print;
 use crate::utils::logging::Tab;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::core::app::App;
 
 /// Hash a password using Argon2.
@@ -41,14 +40,14 @@ pub fn hash_password(password: &str) -> Result<String> {
 ///
 /// If Argon2 or bcrypt fails to verify the password for any reason, 
 /// this function will return an error containing the error message.
-pub fn verify_and_upgrade(password: &str, username: &str, stored_hash: &str, app: Option<Arc<Mutex<App>>>) -> Result<Option<String>> {
+pub fn verify_and_upgrade(password: &str, username: &str, stored_hash: &str, app: &Arc<App>) -> Result<Option<String>> {
     if stored_hash.starts_with("$2b$") || stored_hash.starts_with("$2a$") {
         if bcrypt_verify(password, stored_hash).map_err(|e| anyhow!(e.to_string()))? {
             let new_hash = hash_password(password)?;
             beautify_print(
                 &format!("Upgraded password for user '{}'", username),
                 "info",
-                app,
+                Some(app.clone()),
                 Tab::Logs
             );
             Ok(Some(new_hash))
