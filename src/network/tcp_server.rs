@@ -200,12 +200,6 @@ async fn handle_client(
                     continue;
                 }
 
-                let count = parts
-                    .get(2)
-                    .and_then(|s| s.trim().parse::<usize>().ok())
-                    .unwrap_or(15)
-                    .min(15);
-
                 let rows = match tx_model.get_by_username(target_user).await {
                     Ok(r) => r,
                     Err(e) => {
