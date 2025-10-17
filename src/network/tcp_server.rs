@@ -8,8 +8,6 @@ use crate::models::transaction::TransactionModel;
 use crate::models::user::UserModel;
 use crate::utils::logging::beautify_print;
 use crate::utils::crypto::verify_and_upgrade;
-use std::collections::BTreeMap;
-use serde_json::json;
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use crate::utils::logging::Tab;
@@ -46,7 +44,7 @@ pub async fn start_tcp_server(
                 data_received: 0,
                 uptime: chrono::Local::now(),
             });
-            app.log(format!("🟢 New connection from {}:{}", ip, port));
+            app.log(format!("New connection from {}:{}", ip, port));
         }
 
         let user_model = Arc::clone(&user_model);
@@ -59,10 +57,10 @@ pub async fn start_tcp_server(
             let mut app = app.lock().await;
             match res {
                 Ok(_) => {
-                    app.log(format!("🔴 Client disconnected: {}:{}", ip, port));
+                    app.log(format!("Client disconnected: {}:{}", ip, port));
                 }
                 Err(e) => {
-                    app.log(format!("❌ Error handling client {}:{} — {:?}", ip, port, e));
+                    app.log(format!("Error handling client {}:{} — {:?}", ip, port, e));
                 }
             }
             app.remove_connection(&ip, port);
@@ -208,7 +206,7 @@ async fn handle_client(
                     .unwrap_or(15)
                     .min(15);
 
-                let rows = match tx_model.get_all().await {
+                let rows = match tx_model.get_by_username(target_user).await {
                     Ok(r) => r,
                     Err(e) => {
                         let mut arc_app = app.lock().await;
@@ -218,36 +216,8 @@ async fn handle_client(
                     }
                 };
 
-                let mut filtered = BTreeMap::new();
-                let mut idx = 0;
-
-                for row in rows.into_iter().rev() {
-                    if row.username == target_user || row.recipient == target_user {
-                        let parts: Vec<&str> = row.timestamp.split_whitespace().collect();
-                        let date = parts.get(0).unwrap_or(&"");
-                        let time = parts.get(1).unwrap_or(&"");
-
-                        filtered.insert(
-                            idx.to_string(),
-                            json!({
-                                "Date": date,
-                                "Time": time,
-                                "Sender": row.username,
-                                "Recipient": row.recipient,
-                                "Amount": row.amount,
-                                "Hash": row.hash,
-                                "Memo": row.memo.replace(|c: char| !c.is_ascii_alphanumeric() && !" .-:!#_+-".contains(c), " ")
-                            }),
-                        );
-                        idx += 1;
-                        if idx >= count {
-                            break;
-                        }
-                    }
-                }
-
                 let data_str =
-                    serde_json::to_string(&filtered).unwrap_or_else(|_| "{}".to_string())
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "{}".to_string())
                         + "\n";
 
                 if let Err(e) = socket.write_all(data_str.as_bytes()).await {
