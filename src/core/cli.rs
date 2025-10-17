@@ -367,7 +367,7 @@ async fn handle_user_command(
 
 pub fn draw_tui(
     terminal: &mut Terminal<CrosstermBackend<&mut Stdout>>,
-    _input_text: &str,
+    input_text: &str,
     connections: &Vec<Connection>,
     logs_text: &str,
     console_text: &str,
@@ -398,7 +398,9 @@ pub fn draw_tui(
             console_line_count - console_height
         } else { 0 };
 
-        let console_block = Paragraph::new(console_text)
+        let console_combined = format!("{}\n> {}", console_text, input_text);
+
+        let console_block = Paragraph::new(console_combined)
             .block(Block::default().title("DUCO Server $").borders(Borders::ALL))
             .wrap(Wrap { trim: true })
             .scroll((console_scroll as u16, 0));
