@@ -6,11 +6,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::Result;
 use crate::models::transaction::TransactionModel;
 use crate::models::user::UserModel;
-use crate::utils::logging::beautify_print;
 use crate::utils::crypto::verify_and_upgrade;
-use tokio::sync::Mutex;
 use std::sync::Arc;
-use crate::utils::logging::Tab;
 use tokio::time::{timeout, Duration};
 use crate::core::app::Connection;
 
@@ -19,11 +16,12 @@ use crate::core::app::Connection;
 pub async fn start_tcp_server(
     dbs: Databases,
     cfg: AppConfig,
-    app: Arc<Mutex<App>>,
+    app: Arc<App>,
 ) -> Result<()> {
     let addr = format!("{}:{}", cfg.server.tcp_host, cfg.server.tcp_port);
     let listener = TcpListener::bind(&addr).await?;
-    beautify_print(&format!("✅ Server listening on {}\n", addr), "success", Some(app.clone()), Tab::Logs);
+
+    app.log(format!("TCP Server Listening on {}", addr));
 
     let user_model = Arc::new(UserModel::new(dbs.users.clone()));
     let tx_model = Arc::new(TransactionModel::new(dbs.transactions.clone()));
@@ -34,7 +32,6 @@ pub async fn start_tcp_server(
         let port = peer.port();
 
         {
-            let mut app = app.lock().await;
             app.add_connection(Connection {
                 name: format!("Client-{}", port),
                 ip: ip.clone(),
@@ -52,9 +49,8 @@ pub async fn start_tcp_server(
         let app = Arc::clone(&app);
 
         tokio::spawn(async move {
-            let res = handle_client(socket, user_model, tx_model, app.clone()).await;
+            let res = handle_client(socket, user_model, tx_model, &app).await;
 
-            let mut app = app.lock().await;
             match res {
                 Ok(_) => {
                     app.log(format!("Client disconnected: {}:{}", ip, port));
@@ -73,7 +69,7 @@ async fn handle_client(
     mut socket: tokio::net::TcpStream,
     user_model: Arc<UserModel>,
     tx_model: Arc<TransactionModel>,
-    app: Arc<Mutex<App>>,
+    app: &Arc<App>,
 ) -> Result<()> {
     let mut buf = [0u8; 2048];
     let mut logged_in = false;
@@ -91,19 +87,16 @@ async fn handle_client(
         let n = match read_result {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => {
-                let mut app = app.lock().await;
                 app.log(format!("Read error: {:?}", e));
                 break;
             }
             Err(e) => {
-                let mut app = app.lock().await;
                 app.log(format!("Timeout reading socket: {:?}", e));
                 break;
             }
         };
 
         if n == 0 {
-            let mut app = app.lock().await;
             app.log(format!(
                 "TCPClient disconnected: {}",
                 socket.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap())
@@ -114,8 +107,7 @@ async fn handle_client(
         bytes_recv_accum += n;
         if bytes_recv_accum >= FLUSH_THRESHOLD {
             let addr = socket.peer_addr().unwrap();
-            let mut app = app.lock().await;
-            app.update_connection_data_received(&addr.ip().to_string(), addr.port(), bytes_recv_accum);
+            app.update_connection_data_received(&addr.ip().to_string(), addr.port(), bytes_recv_accum as u64);
             bytes_recv_accum = 0;
         }
 
@@ -140,14 +132,13 @@ async fn handle_client(
 
                 match user_model.get_user(user_input).await {
                     Ok(Some(u)) => {
-                        if let Some(new_hash) = verify_and_upgrade(pass_input, &u.username, &u.password, Some(app.clone()))? {
+                        if let Some(new_hash) = verify_and_upgrade(pass_input, &u.username, &u.password, &app)? {
                             if new_hash != u.password {
                                 user_model.update_password(&u.username, &new_hash).await?;
                             }
                             logged_in = true;
                             username = Some(u.username.clone());
                             socket.write_all(b"OK,Authenticated\n").await?;
-                            let mut app = app.lock().await;
                             app.log(format!("User '{}' logged in successfully", user_input));
                         } else {
                             socket.write_all(b"NO,Invalid password\n").await?;
@@ -155,12 +146,10 @@ async fn handle_client(
                     }
                     Ok(_none) => {
                         socket.write_all(b"NO,User not found\n").await?;
-                        let mut app = app.lock().await;
                         app.log(format!("Failed login attempt: {}", user_input));
                     }
                     Err(e) => {
                         socket.write_all(format!("NO,Error: {:?}\n", e).as_bytes()).await?;
-                        let mut app = app.lock().await;
                         app.log(format!("Login error for {}: {:?}", user_input, e));
                     }
                 }
@@ -203,8 +192,7 @@ async fn handle_client(
                 let rows = match tx_model.get_by_username(target_user).await {
                     Ok(r) => r,
                     Err(e) => {
-                        let mut arc_app = app.lock().await;
-                        arc_app.log(format!("Error fetching transactions: {:?}", e));
+                        app.log(format!("Error fetching transactions: {:?}", e));
                         socket.write_all(b"NO,Error fetching transactions\n").await?;
                         continue;
                     }
@@ -215,7 +203,6 @@ async fn handle_client(
                         + "\n";
 
                 if let Err(e) = socket.write_all(data_str.as_bytes()).await {
-                    let mut app = app.lock().await;
                     app.log(format!("Failed to send GTXL data: {:?}", e));
                 }
             }
@@ -236,20 +223,18 @@ async fn handle_client(
 
         if bytes_sent_accum >= FLUSH_THRESHOLD {
             let addr = socket.peer_addr().unwrap();
-            let mut app = app.lock().await;
-            app.update_connection_data_sent(&addr.ip().to_string(), addr.port(), bytes_sent_accum);
+            app.update_connection_data_sent(&addr.ip().to_string(), addr.port(), bytes_sent_accum as u64);
             bytes_sent_accum = 0;
         }
     }
 
     if bytes_sent_accum > 0 || bytes_recv_accum > 0 {
         let addr = socket.peer_addr().unwrap();
-        let mut app = app.lock().await;
         if bytes_sent_accum > 0 {
-            app.update_connection_data_sent(&addr.ip().to_string(), addr.port(), bytes_sent_accum);
+            app.update_connection_data_sent(&addr.ip().to_string(), addr.port(), bytes_sent_accum as u64);
         }
         if bytes_recv_accum > 0 {
-            app.update_connection_data_received(&addr.ip().to_string(), addr.port(), bytes_recv_accum);
+            app.update_connection_data_received(&addr.ip().to_string(), addr.port(), bytes_recv_accum as u64);
         }
     }
 

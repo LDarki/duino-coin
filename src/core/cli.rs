@@ -1,42 +1,87 @@
 use std::io::{self, Stdout};
 use std::sync::Arc;
 use std::time::Duration;
+use std::process::Command;
 
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     prelude::*,
     widgets::{Block, Borders, Paragraph, Wrap, Table, Row, Sparkline},
     style::{Color, Style},
-    text::{Span, Text},
     Terminal,
 };
-use tokio::sync::Mutex;
-use tokio::time::sleep;
+
 use sysinfo::{System};
+use std::env;
 
 use crate::{
     core::app::App, 
     core::app::Connection,
+    core::app::ConnectionEvent,
     core::db::Databases,
     models::user::UserModel,
     models::user::User,
     utils::helpers::*,
 };
+use tokio::time::sleep;
 
-pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<()> {
+use std::collections::HashMap;
+
+struct CliState {
+    connections: HashMap<String, Connection>,
+    logs: Vec<String>,
+    console: Vec<String>,
+    cpu_history: Vec<f32>,
+    mem_history: Vec<f32>,
+}
+
+
+pub async fn start_cli(dbs: Databases, app: Arc<App>) -> anyhow::Result<()> {
     let user_model = Arc::new(UserModel::new(dbs.users.clone()));
-    let mut sys = System::new_all();
+
+    let mut log_rx = app.log_tx.subscribe();
+    let mut console_rx = app.console_tx.subscribe();
+    let mut conn_rx = app.conn_tx.subscribe();
+    let mut metrics_rx = app.metrics_tx.subscribe();
+
+    let mut state = CliState {
+        connections: HashMap::new(),
+        logs: Vec::new(),
+        console: Vec::new(),
+        cpu_history: Vec::new(),
+        mem_history: Vec::new(),
+    };
 
     {
-        let mut app_lock = app.lock().await;
-        app_lock.console(colored::Colorize::yellow("Type 'help' for commands, 'exit' to quit.").to_string());
+        app.console(colored::Colorize::yellow("Type 'help' for commands, 'exit' to quit.").to_string());
     }
+
+    let metrics_tx_clone = app.metrics_tx.clone();
+
+    tokio::spawn(async move {
+        let mut sys = System::new_all();
+
+        loop {
+            sys.refresh_cpu_all();
+            sys.refresh_memory();
+
+            let cpu_usage = sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
+            let mem_used = sys.used_memory() as f32;
+            let mem_total = sys.total_memory() as f32;
+            let mem_percent = if mem_total > 0.0 { (mem_used / mem_total) * 100.0 } else { 0.0 };
+
+            let _ = metrics_tx_clone.send((cpu_usage, mem_percent));
+
+            tokio::time::sleep(Duration::from_millis(1000)).await; // cada 1s
+        }
+    });
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -47,67 +92,57 @@ pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<(
     let mut restart_confirmation_pending = false;
 
     loop {
-        let (
-            _input_text,
-            connections,
-            logs_text,
-            console_text,
-            cpu_history,
-            mem_history
-        ) = {
-            let mut app_lock = app.lock().await;
-            let logs_str = app_lock.logs.iter().cloned().collect::<Vec<_>>().join("\n");
+        while let Ok(msg) = log_rx.try_recv() {
+            state.logs.push(msg.to_string());
+            if state.logs.len() > 100 { state.logs.remove(0); }
+        }
+        
+        while let Ok(msg) = console_rx.try_recv() {
+            state.console.push(msg.to_string());
+            if state.console.len() > 100 { state.console.remove(0); }
+        }
 
-            let console_content = {
-                let mut lines = app_lock.console.iter().map(|s| s.trim_end()).collect::<Vec<_>>();
+        while let Ok((cpu, mem)) = metrics_rx.try_recv() {
+            state.cpu_history.push(cpu);
+            state.mem_history.push(mem);
+            if state.cpu_history.len() > 30 { state.cpu_history.remove(0); }
+            if state.mem_history.len() > 30 { state.mem_history.remove(0); }
+        }
 
-                let prompt_line = Text::from(Line::from(
-                    vec![
-                        Span::styled("DUCO Server $", Style::default().fg(Color::Yellow)),
-                        Span::raw(" "),
-                        Span::raw(&app_lock.input),
-                    ]
-                )).to_string();
-
-                lines.push(&prompt_line);
-                lines.join("\n")
-            };
-
-            sys.refresh_cpu_all();
-            sys.refresh_memory();
-
-            let global_cpu = sys.global_cpu_usage();
-            let total_mem = sys.total_memory() as f32;
-            let used_mem = sys.used_memory() as f32;
-            let mem_percent: f32 = (used_mem / total_mem) * 100.0;
-
-            app_lock.cpu_history.push(global_cpu);
-            app_lock.mem_history.push(mem_percent);
-            if app_lock.cpu_history.len() > 30 {
-                app_lock.cpu_history.remove(0);
+        while let Ok(event) = conn_rx.try_recv() {
+            match event {
+                ConnectionEvent::Add(conn) => {
+                    state.connections.insert(conn.ip.clone(), conn);
+                }
+                ConnectionEvent::Remove(ip, _port) => {
+                    state.connections.remove(&ip);
+                }
+                ConnectionEvent::UpdateDataSent(ip, _port, bytes) => {
+                    if let Some(conn) = state.connections.get_mut(&ip) {
+                        conn.data_sent += bytes;
+                    }
+                }
+                ConnectionEvent::UpdateDataReceived(ip, _port, bytes) => {
+                    if let Some(conn) = state.connections.get_mut(&ip) {
+                        conn.data_received += bytes;
+                    }
+                }
             }
-            if app_lock.mem_history.len() > 30 {
-                app_lock.mem_history.remove(0);
-            }
+        }
 
-            (
-                app_lock.input.clone(),
-                app_lock.connections.clone(),
-                logs_str,
-                console_content,
-                app_lock.cpu_history.clone(),
-                app_lock.mem_history.clone(),
-            )
+        let app_input = {
+            let input = app.input.lock().await;
+            input.clone()
         };
 
         draw_tui(
             &mut terminal,
-            &_input_text,
-            &connections,
-            &logs_text,
-            &console_text,
-            &cpu_history,
-            &mem_history,
+            &app_input,
+            &state.connections.values().cloned().collect(),
+            &state.logs.join("\n"),
+            &state.console.join("\n"),
+            &state.cpu_history,
+            &state.mem_history,
         )?;
 
         sleep(Duration::from_millis(100)).await;
@@ -118,23 +153,23 @@ pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<(
 
                 match key.code {
                     KeyCode::Char(c) => {
-                        let mut app_lock = app.lock().await;
                         if c == 'c' && key.modifiers.contains(KeyModifiers::CONTROL) {
-                            app_lock.console(colored::Colorize::yellow("Received Ctrl+C. Exiting...").to_string());
+                            app.console(colored::Colorize::yellow("Received Ctrl+C. Exiting...").to_string());
                             should_break = true;
                         } else {
-                            app_lock.input.push(c);
+                            let mut input = app.input.lock().await;
+                            input.push(c);
                         }
                     }
                     KeyCode::Backspace => {
-                        let mut app_lock = app.lock().await;
-                        app_lock.input.pop();
+                        let mut input = app.input.lock().await;
+                        input.pop();
                     }
                     KeyCode::Enter => {
                         let cmd = {
-                            let mut app_lock = app.lock().await;
-                            let cmd = app_lock.input.trim().to_string();
-                            app_lock.input.clear();
+                            let mut app_input = app.input.lock().await;
+                            let cmd = app_input.trim().to_string();
+                            app_input.clear();
                             cmd
                         };
 
@@ -143,39 +178,41 @@ pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<(
                         }
 
                         if restart_confirmation_pending {
-                            let mut app_lock = app.lock().await;
                             if cmd.to_lowercase() == "y" {
-                                app_lock.console(colored::Colorize::green("Restarting...").to_string());
-                                *app_lock = App::new();
+                                app.console(colored::Colorize::green("Restarting...").to_string());
+                                let exe = env::current_exe().expect("Failed to get current exe path");
+
+                                Command::new(exe)
+                                    .args(env::args().skip(1))
+                                    .spawn()
+                                    .expect("Failed to spawn new process");
+
+                                std::process::exit(0);
                             } else {
-                                app_lock.console(colored::Colorize::yellow("Restart cancelled.").to_string());
+                                app.console(colored::Colorize::yellow("Restart cancelled.").to_string());
                             }
                             restart_confirmation_pending = false;
                             continue;
                         }
 
                         {
-                            let mut app_lock = app.lock().await;
-                            app_lock.console(format!("> {}", cmd));
+                            app.console(format!("> {}", cmd));
                         }
 
                         match cmd.as_str() {
                             "exit" => {
-                                let mut app_lock = app.lock().await;
-                                app_lock.log(colored::Colorize::red("Exiting CLI loop.").to_string());
+                                app.log(colored::Colorize::red("Exiting CLI loop.").to_string());
                                 should_break = true;
                             }
                             "clear" => {
-                                let mut app_lock = app.lock().await;
-                                app_lock.console.clear();
+                                state.console.clear();
                             }
                             "restart" => {
-                                let mut app_lock = app.lock().await;
-                                app_lock.console("Are you sure you want to restart? (Y/n)".to_string());
+                                app.console("Are you sure you want to restart? (Y/n)".to_string());
                                 restart_confirmation_pending = true;
                             }
                             _ => {
-                                handle_command(cmd, Arc::clone(&app), Arc::clone(&user_model)).await;
+                                handle_command(cmd, &app, Arc::clone(&user_model)).await;
                             }
                         }
                     }
@@ -194,7 +231,7 @@ pub async fn start_cli(dbs: Databases, app: Arc<Mutex<App>>) -> anyhow::Result<(
     Ok(())
 }
 
-async fn handle_command(cmd: String, app: Arc<Mutex<App>>, user_model: Arc<UserModel>) {
+async fn handle_command(cmd: String, app: &Arc<App>, user_model: Arc<UserModel>) {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
 
     match parts.get(0).map(|s| *s) {
@@ -205,14 +242,12 @@ async fn handle_command(cmd: String, app: Arc<Mutex<App>>, user_model: Arc<UserM
             - restart: Re-initializes server state (needs 'Y' confirmation)
             - clear
             - user add/info/del/upd";
-            let mut app = app.lock().await;
             app.console(help_msg.to_string());
         }
         Some("user") => {
             handle_user_command(parts, app, user_model).await;
         }
         _ => {
-            let mut app = app.lock().await;
             app.console("Unknown command. Type 'help' for a list of commands.".to_string());
         }
     }
@@ -220,10 +255,9 @@ async fn handle_command(cmd: String, app: Arc<Mutex<App>>, user_model: Arc<UserM
 
 async fn handle_user_command(
     parts: Vec<&str>,
-    app: Arc<Mutex<App>>,
+    app: &Arc<App>,
     user_model: Arc<UserModel>,
 ) {
-    let app_clone = Arc::clone(&app);
     let user_model_clone = Arc::clone(&user_model);
 
     match parts.get(1).map(|s| *s) {
@@ -239,7 +273,6 @@ async fn handle_user_command(
                 .await 
             {
                 Ok(_) => {
-                    let mut app = app_clone.lock().await; 
                     app.console(
                         format!("User added: {}", username)
                             .green()
@@ -247,7 +280,6 @@ async fn handle_user_command(
                     );
                 }
                 Err(e) => {
-                    let mut app = app_clone.lock().await;
                     app.console(
                         format!("Error: {}", e).red().to_string(),
                     );
@@ -258,11 +290,9 @@ async fn handle_user_command(
             let username = parts[2];
             match user_model_clone.get_user(username).await { 
                 Ok(Some(u)) => {
-                    let mut app = app_clone.lock().await;
                     app.console(user_info_table(&u));
                 }
-                Ok(none) => {
-                    let mut app = app_clone.lock().await;
+                Ok(_none) => {
                     app.console(
                         format!("User '{}' not found", username)
                             .yellow()
@@ -270,7 +300,6 @@ async fn handle_user_command(
                     );
                 }
                 Err(e) => {
-                    let mut app = app_clone.lock().await;
                     app.console(
                         format!("Error: {:?}", e).red().to_string(),
                     );
@@ -281,7 +310,6 @@ async fn handle_user_command(
             let username = parts[2];
             match user_model_clone.delete_user(username).await { 
                 Ok(_) => {
-                    let mut app = app_clone.lock().await; 
                     app.console(
                         format!("User deleted: {}", username)
                             .green()
@@ -289,7 +317,6 @@ async fn handle_user_command(
                     );
                 }
                 Err(e) => {
-                    let mut app = app_clone.lock().await;
                     app.console(
                         format!("Delete failed: {}", e)
                             .red()
@@ -307,7 +334,6 @@ async fn handle_user_command(
                 .await 
             {
                 Ok(_) => {
-                    let mut app = app_clone.lock().await; 
                     app.console(
                         format!(
                             "User {} updated field {} to {}",
@@ -318,7 +344,6 @@ async fn handle_user_command(
                     );
                 }
                 Err(e) => {
-                    let mut app = app_clone.lock().await;
                     app.console(
                         format!("Update failed: {}", e)
                             .red()
@@ -335,7 +360,6 @@ async fn handle_user_command(
                 - user del <username>
                 - user upd <username> <field> <value>
                 ";
-            let mut app = app_clone.lock().await; 
             app.console(usage.to_string());
         }
     }

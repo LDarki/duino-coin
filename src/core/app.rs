@@ -1,18 +1,24 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
 use chrono::Local;
-use colored::*;
-use tokio::sync::Mutex;
+use std::borrow::Cow;
+use std::sync::Arc;
 use chrono::DateTime;
+use tokio::sync::broadcast;
+use tokio::sync::Mutex;
+
+pub struct App {
+    pub input: Mutex<String>,
+    pub log_tx: broadcast::Sender<Cow<'static, str>>,
+    pub console_tx: broadcast::Sender<Cow<'static, str>>,
+    pub conn_tx: broadcast::Sender<ConnectionEvent>,
+    pub metrics_tx: broadcast::Sender<(f32, f32)>
+}
 
 #[derive(Clone)]
-pub struct App {
-    pub input: String,
-    pub logs: VecDeque<String>,
-    pub console: VecDeque<String>,
-    pub connections: Vec<Connection>,
-    pub cpu_history: Vec<f32>,
-    pub mem_history: Vec<f32>,
+pub enum ConnectionEvent {
+    Add(Connection),
+    Remove(String, u16),
+    UpdateDataSent(String, u16, u64),
+    UpdateDataReceived(String, u16, u64),
 }
 
 #[derive(Clone, Debug)]
@@ -27,52 +33,42 @@ pub struct Connection {
 }
 
 impl App {
-    pub fn new() -> Self {
-        Self {
-            input: String::new(),
-            logs: VecDeque::with_capacity(100),
-            console: VecDeque::with_capacity(100),
-            connections: vec![],
-            cpu_history: vec![],
-            mem_history: vec![],
-        }
+    pub fn new() -> Arc<Self>  {
+        let (log_tx, _) = broadcast::channel(100);
+        let (console_tx, _) = broadcast::channel(100);
+        let (conn_tx, _) = broadcast::channel(100);
+        let (metrics_tx, _) = broadcast::channel(100);
+
+        Arc::new(Self { 
+            input: Mutex::new(String::new()),
+            log_tx, 
+            console_tx,
+            conn_tx,
+            metrics_tx
+        })
     }
 
-    pub fn log(&mut self, msg: String) {
-        if self.logs.len() == 100 {
-            self.logs.pop_front();
-        }
-        self.logs.push_back(msg.trim_end().to_string());
+    pub fn log(&self, msg: impl Into<Cow<'static, str>>) {
+        let _ = self.log_tx.send(msg.into());
     }
 
-    pub fn console(&mut self, msg: String) {
-        if self.console.len() == 100 {
-            self.console.pop_front();
-        }
-        self.console.push_back(msg.trim_end().to_string());
+    pub fn console(&self, msg: impl Into<Cow<'static, str>>) {
+        let _ = self.console_tx.send(msg.into());
     }
 
-    pub fn add_connection(&mut self, conn: Connection) {
-        self.connections.push(conn);
+    pub fn add_connection(&self, conn: Connection) {
+        let _ = self.conn_tx.send(ConnectionEvent::Add(conn));
     }
 
-    pub fn remove_connection(&mut self, ip: &str, port: u16) {
-        self.connections.retain(|c| !(c.ip == ip && c.port == port));
+    pub fn remove_connection(&self, ip: &str, port: u16) {
+        let _ = self.conn_tx.send(ConnectionEvent::Remove(ip.to_string(), port));
     }
 
-    pub fn update_connection_data_received(&mut self, ip: &str, port: u16, bytes: usize) {
-        if let Some(conn) = self.connections.iter_mut()
-            .find(|c| c.ip == ip && c.port == port)
-        {
-            conn.data_received += bytes as u64;
-        }
+    pub fn update_connection_data_received(&self, ip: &str, port: u16, bytes: u64) {
+        let _ = self.conn_tx.send(ConnectionEvent::UpdateDataReceived(ip.to_string(), port, bytes));
     }
 
-    pub fn update_connection_data_sent(&mut self, ip: &str, port: u16, bytes: usize) {
-        if let Some(conn) = self.connections.iter_mut()
-            .find(|c| c.ip == ip && c.port == port)
-        {
-            conn.data_sent += bytes as u64;
-        }
+    pub fn update_connection_data_sent(&self, ip: &str, port: u16, bytes: u64) {
+        let _ = self.conn_tx.send(ConnectionEvent::UpdateDataSent(ip.to_string(), port, bytes));
     }
 }

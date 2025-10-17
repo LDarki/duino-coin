@@ -29,7 +29,7 @@ pub fn init_logger() -> bool {
 /// * `level`: The level of the message. Can be "error", "success", "warning", or any other string.
 /// * `app`: Optional Arc<Mutex<App>> to log the message in the app context.
 /// 
-pub fn beautify_print(msg: &str, level: &str, app: Option<Arc<Mutex<App>>>, tab: Tab) {
+pub fn beautify_print(msg: &str, level: &str, app: Option<Arc<App>>, tab: Tab) {
     let ts = Local::now().format("%H:%M:%S").to_string();
     let prefix = match level.to_lowercase().as_str() {
         "error" => Span::styled("[ERROR]", Style::default().fg(Color::Red)),
@@ -51,27 +51,21 @@ pub fn beautify_print(msg: &str, level: &str, app: Option<Arc<Mutex<App>>>, tab:
         ])
     ).to_string();
 
-    if let Some(app) = app {
-        let app = app.clone();
-        tokio::spawn(async move {
-            let mut app = app.lock().await;
-            match tab {
-                Tab::Main => {
-                    if app.console.len() == 100 {
-                        app.console.pop_front();
-                    }
-                    app.console.push_back(text_line);
+
+    match app {
+        Some(app) => {
+            let app = Arc::clone(&app);
+            let text_line = text_line.clone();
+            tokio::spawn(async move {
+                match tab {
+                    Tab::Main => app.console(text_line),
+                    Tab::Logs => app.log(text_line),
                 }
-                Tab::Logs => {
-                    if app.logs.len() == 100 {
-                        app.logs.pop_front();
-                    }
-                    app.logs.push_back(text_line);
-                }
-            }
-        });
-    } else {
-        println!("{}", text_line);
-        std::io::stdout().flush().unwrap();
+            });
+        }
+        _none => {
+            println!("{}", text_line);
+            std::io::stdout().flush().unwrap();
+        }
     }
 }

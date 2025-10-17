@@ -30,15 +30,15 @@ use crate::core::app::App;
 async fn main() -> anyhow::Result<()> {
     let cfg = AppConfig::load(Some("config.toml")).expect("Failed to load Config.toml");
     let dbs = Databases::init(&cfg).await?;
-    let app = Arc::new(Mutex::new(App::new()));
+    let app = App::new();
 
     let app_for_cli = Arc::clone(&app);
     let app_for_tcp = Arc::clone(&app);
 
     info!("Starting server on {}:{}", cfg.server.tcp_host, cfg.server.tcp_port);
 
-    let _server_task = tokio::spawn(network::tcp_server::start_tcp_server(dbs.clone(), cfg.clone(), app_for_cli));
-    let cli_task = tokio::spawn(core::cli::start_cli(dbs.clone(), app_for_tcp));
+    let _server_task = tokio::spawn(network::tcp_server::start_tcp_server(dbs.clone(), cfg.clone(), app_for_tcp));
+    let cli_task = tokio::spawn(core::cli::start_cli(dbs.clone(), app_for_cli));
 
     match cli_task.await {
         Ok(Ok(_)) => info!("CLI finished, terminating process"),
