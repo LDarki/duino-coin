@@ -1,4 +1,4 @@
-use sqlx::{Pool, Sqlite, Row, Column};
+use sqlx::{Pool, Sqlite, Row};
 use anyhow::Result;
 
 #[derive(Clone)]

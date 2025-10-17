@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, Duration};
+use chrono::{DateTime, Local};
 
 /// Converts a DateTime<Local> into a human-readable string, such as "5s ago", "1m 3s ago", "1h 2m ago", or "1d 3h ago".
 ///

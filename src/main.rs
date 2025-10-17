@@ -3,14 +3,11 @@ mod utils;
 mod models;
 mod network;
 
-use crate::network::tcp_server;
 use core::db::Databases;
 use core::config::AppConfig;
-use core::cli;
 use std::process;
 use tracing::info;
 use std::sync::{Arc};
-use tokio::sync::Mutex;
 use crate::core::app::App;
 
 /// Main entry point for the DUCO Server application.

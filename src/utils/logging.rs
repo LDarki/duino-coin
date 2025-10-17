@@ -1,9 +1,7 @@
-use colored::*;
 use chrono::Local;
 use std::io::Write;
 use std::sync::Arc;
 use crate::core::app::App;
-use tokio::sync::Mutex;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Span, Text, Line};
 
