@@ -1,23 +1,20 @@
-use crate::core::db::Databases;
-use crate::core::config::AppConfig;
 use crate::core::app::App;
-use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use anyhow::Result;
+use crate::core::app::Connection;
+use crate::core::config::AppConfig;
+use crate::core::db::Databases;
 use crate::models::transaction::TransactionModel;
 use crate::models::user::UserModel;
 use crate::utils::crypto::verify_and_upgrade;
+use crate::utils::helpers::block_ip_background;
+use anyhow::Result;
 use std::sync::Arc;
-use tokio::time::{timeout, Duration};
-use crate::core::app::Connection;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::{Duration, timeout};
 
 /// Starts a TCP server that listens for incoming connections and
 /// handles them asynchronously.
-pub async fn start_tcp_server(
-    dbs: Databases,
-    cfg: AppConfig,
-    app: Arc<App>,
-) -> Result<()> {
+pub async fn start_tcp_server(dbs: Databases, cfg: AppConfig, app: Arc<App>) -> Result<()> {
     let addr = format!("{}:{}", cfg.server.tcp_host, cfg.server.tcp_port);
     let listener = TcpListener::bind(&addr).await?;
 
@@ -77,6 +74,8 @@ async fn handle_client(
     let mut bytes_sent_accum: usize = 0;
     let mut bytes_recv_accum: usize = 0;
     const FLUSH_THRESHOLD: usize = 1024;
+    let mut failed_logins: u32 = 0;
+    const FAIL_THRESHOLD: u32 = 3;
 
     // If no data is received within this duration, the connection will be closed.
     let idle_timeout = Duration::from_secs(300); // 5 minutes
@@ -99,7 +98,9 @@ async fn handle_client(
         if n == 0 {
             app.log(format!(
                 "TCPClient disconnected: {}",
-                socket.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap())
+                socket
+                    .peer_addr()
+                    .unwrap_or_else(|_| "unknown".parse().unwrap())
             ));
             break;
         }
@@ -107,7 +108,11 @@ async fn handle_client(
         bytes_recv_accum += n;
         if bytes_recv_accum >= FLUSH_THRESHOLD {
             let addr = socket.peer_addr().unwrap();
-            app.update_connection_data_received(&addr.ip().to_string(), addr.port(), bytes_recv_accum as u64);
+            app.update_connection_data_received(
+                &addr.ip().to_string(),
+                addr.port(),
+                bytes_recv_accum as u64,
+            );
             bytes_recv_accum = 0;
         }
 
@@ -124,7 +129,9 @@ async fn handle_client(
 
             "LOGI" => {
                 if parts.len() < 3 {
-                    socket.write_all(b"NO,Missing username or password\n").await?;
+                    socket
+                        .write_all(b"NO,Missing username or password\n")
+                        .await?;
                     continue;
                 }
                 let user_input = parts[1].trim();
@@ -132,7 +139,9 @@ async fn handle_client(
 
                 match user_model.get_user(user_input).await {
                     Ok(Some(u)) => {
-                        if let Some(new_hash) = verify_and_upgrade(pass_input, &u.username, &u.password, &app)? {
+                        if let Some(new_hash) =
+                            verify_and_upgrade(pass_input, &u.username, &u.password, &app)?
+                        {
                             if new_hash != u.password {
                                 user_model.update_password(&u.username, &new_hash).await?;
                             }
@@ -140,17 +149,25 @@ async fn handle_client(
                             username = Some(u.username.clone());
                             socket.write_all(b"OK,Authenticated\n").await?;
                             app.log(format!("User '{}' logged in successfully", user_input));
+                            failed_logins = 0;
                         } else {
+                            let ip = socket.peer_addr().unwrap().ip().to_string();
+                            app.log(format!("Auth verify error for {}: {:?}", user_input, ip));
                             socket.write_all(b"NO,Invalid password\n").await?;
+                            failed_logins += 1;
                         }
                     }
                     Ok(_none) => {
                         socket.write_all(b"NO,User not found\n").await?;
                         app.log(format!("Failed login attempt: {}", user_input));
+                        failed_logins += 1;
                     }
                     Err(e) => {
-                        socket.write_all(format!("NO,Error: {:?}\n", e).as_bytes()).await?;
+                        socket
+                            .write_all(format!("NO,Error: {:?}\n", e).as_bytes())
+                            .await?;
                         app.log(format!("Login error for {}: {:?}", user_input, e));
+                        failed_logins += 1;
                     }
                 }
             }
@@ -193,14 +210,15 @@ async fn handle_client(
                     Ok(r) => r,
                     Err(e) => {
                         app.log(format!("Error fetching transactions: {:?}", e));
-                        socket.write_all(b"NO,Error fetching transactions\n").await?;
+                        socket
+                            .write_all(b"NO,Error fetching transactions\n")
+                            .await?;
                         continue;
                     }
                 };
 
                 let data_str =
-                    serde_json::to_string(&rows).unwrap_or_else(|_| "{}".to_string())
-                        + "\n";
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "{}".to_string()) + "\n";
 
                 if let Err(e) = socket.write_all(data_str.as_bytes()).await {
                     app.log(format!("Failed to send GTXL data: {:?}", e));
@@ -221,9 +239,32 @@ async fn handle_client(
             }
         }
 
+        if failed_logins >= FAIL_THRESHOLD {
+            if let Ok(peer_addr) = socket.peer_addr() {
+                let ip_to_block = peer_addr.ip();
+                let app_clone = Arc::clone(app);
+                
+                tokio::spawn(async move {
+                    if let Err(e) = block_ip_background(app_clone, ip_to_block, Some(Duration::from_hours(1))).await {
+                        eprintln!("Failed to block IP {}: {:?}", ip_to_block, e);
+                    }
+                });
+
+                let _ = socket
+                    .write_all(b"NO,Too many failed attempts. Connection closed.\n")
+                    .await;
+            }
+
+            break;
+        }
+
         if bytes_sent_accum >= FLUSH_THRESHOLD {
             let addr = socket.peer_addr().unwrap();
-            app.update_connection_data_sent(&addr.ip().to_string(), addr.port(), bytes_sent_accum as u64);
+            app.update_connection_data_sent(
+                &addr.ip().to_string(),
+                addr.port(),
+                bytes_sent_accum as u64,
+            );
             bytes_sent_accum = 0;
         }
     }
@@ -231,10 +272,18 @@ async fn handle_client(
     if bytes_sent_accum > 0 || bytes_recv_accum > 0 {
         let addr = socket.peer_addr().unwrap();
         if bytes_sent_accum > 0 {
-            app.update_connection_data_sent(&addr.ip().to_string(), addr.port(), bytes_sent_accum as u64);
+            app.update_connection_data_sent(
+                &addr.ip().to_string(),
+                addr.port(),
+                bytes_sent_accum as u64,
+            );
         }
         if bytes_recv_accum > 0 {
-            app.update_connection_data_received(&addr.ip().to_string(), addr.port(), bytes_recv_accum as u64);
+            app.update_connection_data_received(
+                &addr.ip().to_string(),
+                addr.port(),
+                bytes_recv_accum as u64,
+            );
         }
     }
 

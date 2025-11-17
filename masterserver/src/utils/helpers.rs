@@ -1,4 +1,8 @@
 use chrono::{DateTime, Local};
+use std::{net::IpAddr, time::Duration};
+use anyhow::Result;
+use std::sync::Arc;
+use crate::core::app::App;
 
 /// Converts a DateTime<Local> into a human-readable string, such as "5s ago", "1m 3s ago", "1h 2m ago", or "1d 3h ago".
 ///
@@ -40,5 +44,64 @@ pub fn humanize_bytes(bytes: u64) -> String {
         format!("{:.2} TB", (bytes as f64) / TERABYTE as f64)
     } else {
         format!("{:.2} PB", (bytes as f64) / PETABYTE as f64)
+    }
+}
+
+/// Blocks an IP address for a specified duration.
+pub async fn block_ip_background(
+    app: Arc<App>,
+    ip: IpAddr,
+    duration: Option<Duration>, // Some => temporary, None => permanent
+) -> Result<()> {
+    let ipv4 = match ip {
+        IpAddr::V4(v4) => v4,
+        IpAddr::V6(_) => {
+            app.log(format!("Attempted to block non-IPv4 address: {}", ip));
+            return Ok(());
+        }
+    };
+
+    let mut fw_guard = app.firewall.lock().await;
+
+    match fw_guard.block_ip(ipv4) {
+        Ok(_) => {
+            match duration {
+                Some(dur) => {
+                    app.log(format!(
+                        "Blocked IP via eBPF for {:?}: {}",
+                        dur, ipv4
+                    ));
+
+                    // Automatic unblock
+                    let app_clone = Arc::clone(&app);
+                    tokio::spawn(async move {
+                        tokio::time::sleep(dur).await;
+
+                        let mut fw = app_clone.firewall.lock().await;
+                        match fw.unblock_ip(ipv4) {
+                            Ok(_) => app_clone.log(format!(
+                                "Unblocked IP after scheduled duration: {}",
+                                ipv4
+                            )),
+                            Err(e) => app_clone.log(format!(
+                                "Failed to unblock {}: {:?}",
+                                ipv4, e
+                            )),
+                        }
+                    });
+                }
+
+                None => {
+                    // Permanent ban
+                    app.log(format!("Blocked IP permanently via eBPF: {}", ipv4));
+                }
+            }
+
+            Ok(())
+        }
+        Err(e) => {
+            app.log(format!("Failed to block IP {}: {:?}", ipv4, e));
+            Err(e)
+        }
     }
 }
