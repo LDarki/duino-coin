@@ -5,11 +5,10 @@ mod network;
 
 use core::db::Databases;
 use core::config::AppConfig;
-use std::process;
+use std::{process};
 use tracing::info;
 use std::sync::{Arc};
 use crate::core::app::App;
-
 /// Main entry point for the DUCO Server application.
 ///
 /// This function initializes the database connections, starts the TCP server and CLI tasks,
@@ -49,6 +48,4 @@ async fn main() -> anyhow::Result<()> {
     }
 
     process::exit(0);
-
-    Ok(())
 }

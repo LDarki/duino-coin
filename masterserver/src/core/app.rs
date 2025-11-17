@@ -4,13 +4,15 @@ use std::sync::Arc;
 use chrono::DateTime;
 use tokio::sync::broadcast;
 use tokio::sync::Mutex;
+use crate::network::firewall::Firewall;
 
 pub struct App {
     pub input: Mutex<String>,
     pub log_tx: broadcast::Sender<Cow<'static, str>>,
     pub console_tx: broadcast::Sender<Cow<'static, str>>,
     pub conn_tx: broadcast::Sender<ConnectionEvent>,
-    pub metrics_tx: broadcast::Sender<(f32, f32)>
+    pub metrics_tx: broadcast::Sender<(f32, f32)>,
+    pub firewall: Mutex<Firewall>
 }
 
 #[derive(Clone)]
@@ -41,6 +43,7 @@ impl App {
 
         Arc::new(Self { 
             input: Mutex::new(String::new()),
+            firewall: Mutex::new(Firewall::new("eth0").unwrap()),
             log_tx, 
             console_tx,
             conn_tx,

@@ -1,5 +1,7 @@
 use std::io::{self, Stdout};
+use std::net::Ipv4Addr;
 use std::process::Command;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,12 +12,12 @@ use crossterm::{
 };
 
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     prelude::*,
     style::{Color, Style},
     widgets::{Block, Borders, Paragraph, Row, Sparkline, Table, Wrap},
-    Terminal,
 };
 
 use std::env;
@@ -260,8 +262,12 @@ async fn handle_command(cmd: String, app: &Arc<App>, user_model: Arc<UserModel>)
             - help: Shows this message
             - restart: Re-initializes server state (needs 'Y' confirmation)
             - clear
+            - fw block/unblock/list
             - user add/info/del/upd/pass";
             app.console(help_msg.to_string());
+        }
+        Some("fw") => {
+            handle_firewall_command(parts, app).await;
         }
         Some("user") => {
             handle_user_command(parts, app, user_model).await;
@@ -372,6 +378,86 @@ async fn handle_user_command(parts: Vec<&str>, app: &Arc<App>, user_model: Arc<U
                 - user pass <username> <new_password>
                 ";
             app.console(usage.to_string());
+        }
+    }
+}
+
+async fn handle_firewall_command(parts: Vec<&str>, app: &Arc<App>) {
+    match parts.get(1).map(|s| *s) {
+        Some("block") => {
+            if parts.len() == 3 {
+                let ip = parts[2];
+
+                let parsed_ip = match Ipv4Addr::from_str(ip) {
+                    Ok(ip) => ip,
+                    Err(_) => {
+                        app.console(format!("Invalid IP: {}", ip).red().to_string());
+                        return;
+                    }
+                };
+
+                let mut firewal_lock = app.firewall.lock().await;
+
+                match firewal_lock.block_ip(parsed_ip) {
+                    Ok(_) => {
+                        app.console(format!("Blocked IP: {}", ip).green().to_string());
+                    }
+                    Err(e) => {
+                        app.console(format!("Failed to block IP: {}", e).red().to_string());
+                    }
+                }
+            } else {
+                app.console("Usage: fw block <ip>".to_string());
+            }
+        }
+        Some("unblock") => {
+            if parts.len() == 3 {
+                let ip = parts[2];
+
+                let parsed_ip = match Ipv4Addr::from_str(ip) {
+                    Ok(ip) => ip,
+                    Err(_) => {
+                        app.console(format!("Invalid IP: {}", ip).red().to_string());
+                        return;
+                    }
+                };
+
+                let mut firewal_lock = app.firewall.lock().await;
+
+                match firewal_lock.unblock_ip(parsed_ip) {
+                    Ok(_) => {
+                        app.console(format!("Unblocked IP: {}", ip).green().to_string());
+                    }
+                    Err(e) => {
+                        app.console(format!("Failed to unblock IP: {}", e).red().to_string());
+                    }
+                }
+            } else {
+                app.console("Usage: fw unblock <ip>".to_string());
+            }
+        }
+        Some("list") => {
+            let firewall = app.firewall.lock().await;
+            match firewall.list_blocked() {
+                Ok(list) => {
+                    if list.is_empty() {
+                        app.console("Blocked IPs: <empty>".to_string());
+                    } else {
+                        let txt = list
+                            .iter()
+                            .map(|ip| ip.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        app.console(format!("Blocked IPs: {}", txt));
+                    }
+                }
+                Err(e) => {
+                    app.console(format!("Error listing IPs: {}", e).red().to_string());
+                }
+            }
+        }
+        _ => {
+            app.console("Unknown command. Type 'help' for a list of commands.".to_string());
         }
     }
 }

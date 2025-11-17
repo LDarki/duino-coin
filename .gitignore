@@ -1,3 +1,5 @@
 db/
 target/
 config.toml
+test.py
+.cargo

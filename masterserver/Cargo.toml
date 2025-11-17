@@ -1,0 +1,23 @@
+[package]
+name = "masterserver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.41", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "macros"] }
+bcrypt = "0.17"
+sysinfo = { version = "0.37.2" }
+colored = "3.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9.8"
+rand = "0.8"
+chrono = "0.4.42"
+argon2 = "0.5.3"
+serde_json = "1.0.145"
+ratatui = "0.29.0"
+crossterm = "0.29.0"
+aya.workspace = true
